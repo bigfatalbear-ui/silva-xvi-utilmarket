@@ -65,6 +65,22 @@ Sem `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, o app mostra a tela de confi
 4. As imagens dos produtos usam o bucket privado `produtos` e caminhos iniciados pelo UUID da empresa. O bucket público `logos-empresas` é opcional para logotipos; informe no app a URL pública do arquivo em Configurações. O arquivo SQL cria os buckets e policies necessários.
 5. Os projetos gratuitos do Supabase têm limites de uso e podem pausar após períodos de inatividade conforme as regras vigentes do serviço. Consulte o painel e a documentação do Supabase para limites atuais, backups e retenção antes de usar em operação comercial.
 
+## Administração da plataforma
+
+O painel de administração da plataforma é separado do acesso de gerente de cada comércio. Ele permite listar comércios, consultar quantidade de usuários e vendas, cadastrar empresas, alterar plano/licença/vencimento, suspender ou reativar acesso, vincular usuários já existentes no Supabase Auth e consultar a auditoria das alterações. Nenhuma chave `service_role` é usada no navegador: as operações passam por funções SQL `SECURITY DEFINER` que verificam `auth.uid()` contra `platform_admins`.
+
+Depois de executar ou atualizar `supabase/schema.sql` (em um projeto já existente, reexecute o script idempotente para criar as tabelas e funções administrativas), crie o usuário administrador em **Authentication → Users** e conceda a função de plataforma pelo SQL Editor usando o UUID desse usuário:
+
+```sql
+insert into public.platform_admins (user_id)
+values ('UUID-DO-USUARIO-ADMIN')
+on conflict (user_id) do nothing;
+```
+
+Essa tabela não concede escrita/leitura direta ao cliente. Não crie uma tela pública para inserir administradores: a concessão deve ser feita por uma pessoa com acesso confiável ao projeto Supabase. O administrador entra pelo login normal do aplicativo e, após a validação pelo banco, recebe o painel da plataforma em vez do caixa.
+
+Para cadastrar um comércio, use **Novo comércio**. Em seguida, crie ou convide o usuário em **Authentication → Users**; no painel, escolha **Vincular usuário**, informe o mesmo e-mail e atribua o perfil. O vínculo só aceita usuários existentes e ainda não associados a outro comércio. Ativação, suspensão, mudança de plano/vencimento e vínculos são registrados em `platform_admin_audit`.
+
 ## Operação offline e impressoras
 
 O primeiro login e a carga inicial do catálogo precisam de conexão. Depois disso, o navegador pode abrir a sessão validada e vender com o catálogo que já está armazenado naquele dispositivo. Vendas e novos produtos ficam em fila local e são sincronizados periodicamente quando a rede volta. Cada dispositivo tem seu próprio IndexedDB; alterações offline não são compartilhadas até sincronizar.

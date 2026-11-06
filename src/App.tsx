@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
-  BarChart3, Barcode, Check, ChevronDown, Cloud, CloudOff, CreditCard,
-  LogOut, Menu, Minus, Package, Pencil, Plus, Printer, Search, Settings,
-  ShoppingBasket, Trash2, Wifi, X
+  BarChart3, Barcode, Building2, Check, ChevronDown, Cloud, CloudOff, CreditCard,
+  LogOut, Menu, Minus, Package, Pencil, Plus, Printer, RefreshCw, Search, Settings,
+  ShieldCheck, ShoppingBasket, Trash2, UserPlus, Wifi, X
 } from 'lucide-react'
 import type { PaymentMethod, Product, Sale, ShopSettings, UserRole } from './types'
 import { DEFAULT_SETTINGS } from './types'
@@ -24,6 +24,22 @@ type UserInfo = {
 }
 type View = 'pdv' | 'produtos' | 'vendas' | 'configuracoes'
 type BasketLine = { product: Product; quantity: number }
+type ManagedCompany = {
+  id: string
+  nome_fantasia: string
+  status_licenca: 'ativa' | 'bloqueada' | 'teste'
+  expira_em: string
+  plano: string
+  total_usuarios: number
+  total_vendas: number
+}
+type AdminAuditEntry = {
+  id: number
+  action: string
+  company_name: string | null
+  actor_email: string | null
+  created_at: string
+}
 const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const cachedUserKey = (userId: string) => `utilmarket:session:${userId}`
 
@@ -47,6 +63,7 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine)
   const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState('')
+  const [platformAdmin, setPlatformAdmin] = useState(false)
 
   const loadWorkspace = useCallback(async (tenantId: string) => {
     const [cachedProducts, cachedSettings] = await Promise.all([
@@ -97,7 +114,16 @@ export default function App() {
     if (!supabase) { setChecking(false); return }
     setChecking(true)
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { setUser(null); setChecking(false); return }
+    if (!session) { setUser(null); setPlatformAdmin(false); setChecking(false); return }
+    const { data: isPlatformAdmin } = await supabase.rpc('is_platform_admin')
+    if (isPlatformAdmin === true) {
+      setPlatformAdmin(true)
+      setBlocked('')
+      setUser(null)
+      setChecking(false)
+      return
+    }
+    setPlatformAdmin(false)
     const { data: member, error } = await supabase.from('usuarios')
       .select('id,tenant_id,perfil,empresas(nome_fantasia,status_licenca,expira_em,plano)')
       .eq('id', session.user.id).maybeSingle()
@@ -195,11 +221,13 @@ export default function App() {
     if (user) localStorage.removeItem(cachedUserKey(user.id))
     await supabase?.auth.signOut()
     setUser(null)
+    setPlatformAdmin(false)
     setSales([])
   }
 
   if (!isSupabaseConfigured) return <SetupScreen />
   if (checking) return <div className="loading-screen"><div className="loader" />Validando acesso…</div>
+  if (platformAdmin) return <PlatformAdminApp onLogout={logout} />
   if (blocked) return <LoginCard blocked={blocked} onSuccess={checkSession} />
   if (!user) return <LoginCard onSuccess={checkSession} />
 
@@ -259,6 +287,208 @@ function AuthorshipNotice() {
     <span>Reprodução, distribuição ou adaptação somente mediante autorização.</span>
     <span>Contato: <a href="https://wa.me/5571999383974">WhatsApp (71) 99938-3974</a> · <a href="mailto:fabiosilvaanjos@live.com">fabiosilvaanjos@live.com</a></span>
   </footer>
+}
+
+function PlatformAdminApp({ onLogout }: { onLogout: () => void }) {
+  const [companies, setCompanies] = useState<ManagedCompany[]>([])
+  const [audit, setAudit] = useState<AdminAuditEntry[]>([])
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [editing, setEditing] = useState<ManagedCompany | null>(null)
+  const [linking, setLinking] = useState<ManagedCompany | null>(null)
+  const [companyFormOpen, setCompanyFormOpen] = useState(false)
+  const [companyName, setCompanyName] = useState('')
+  const [plan, setPlan] = useState('gratuito')
+  const [licenseStatus, setLicenseStatus] = useState<ManagedCompany['status_licenca']>('teste')
+  const [expiration, setExpiration] = useState(() => new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10))
+  const [memberEmail, setMemberEmail] = useState('')
+  const [memberRole, setMemberRole] = useState<UserRole>('gerente')
+
+  const loadAdminData = useCallback(async () => {
+    if (!supabase) return
+    setBusy(true)
+    setError('')
+    const [companyResult, auditResult] = await Promise.all([
+      supabase.rpc('platform_list_companies'),
+      supabase.rpc('platform_list_audit')
+    ])
+    if (companyResult.error) setError(`Não foi possível carregar os comércios: ${companyResult.error.message}`)
+    else setCompanies((companyResult.data ?? []) as ManagedCompany[])
+    if (auditResult.error) setError(current => current
+      ? `${current} · Falha ao carregar auditoria: ${auditResult.error.message}`
+      : `Falha ao carregar auditoria: ${auditResult.error.message}`)
+    else setAudit((auditResult.data ?? []) as AdminAuditEntry[])
+    setBusy(false)
+  }, [])
+
+  useEffect(() => { void loadAdminData() }, [loadAdminData])
+
+  const filteredCompanies = companies.filter(company =>
+    `${company.nome_fantasia} ${company.plano} ${company.status_licenca}`.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR'))
+  )
+  const activeCount = companies.filter(company => company.status_licenca === 'ativa' && new Date(company.expira_em).getTime() >= Date.now()).length
+  const trialCount = companies.filter(company => company.status_licenca === 'teste').length
+  const blockedCount = companies.filter(company => company.status_licenca === 'bloqueada' || new Date(company.expira_em).getTime() < Date.now()).length
+
+  const resetCompanyForm = () => {
+    setCompanyFormOpen(false)
+    setCompanyName('')
+    setPlan('gratuito')
+    setLicenseStatus('teste')
+    setExpiration(new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10))
+    setEditing(null)
+  }
+  const openEdit = (company: ManagedCompany) => {
+    setCompanyFormOpen(true)
+    setEditing(company)
+    setCompanyName(company.nome_fantasia)
+    setPlan(company.plano)
+    setLicenseStatus(company.status_licenca)
+    setExpiration(new Date(company.expira_em).toISOString().slice(0, 10))
+  }
+  const saveCompany = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!supabase) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    const expiresAt = new Date(`${expiration}T23:59:59`).toISOString()
+    const result = editing
+      ? await supabase.rpc('platform_update_company', {
+          p_tenant_id: editing.id,
+          p_nome_fantasia: companyName.trim(),
+          p_status_licenca: licenseStatus,
+          p_expira_em: expiresAt,
+          p_plano: plan.trim()
+        })
+      : await supabase.rpc('platform_create_company', {
+          p_nome_fantasia: companyName.trim(),
+          p_status_licenca: licenseStatus,
+          p_expira_em: expiresAt,
+          p_plano: plan.trim()
+        })
+    setBusy(false)
+    if (result.error) { setError(`Não foi possível salvar o comércio: ${result.error.message}`); return }
+    setNotice(editing ? 'Comércio atualizado.' : 'Comércio cadastrado. Vincule um usuário para liberar o primeiro acesso.')
+    resetCompanyForm()
+    await loadAdminData()
+  }
+  const linkMember = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!supabase || !linking) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    const result = await supabase.rpc('platform_add_member', {
+      p_tenant_id: linking.id,
+      p_email: memberEmail.trim(),
+      p_perfil: memberRole
+    })
+    setBusy(false)
+    if (result.error) { setError(`Não foi possível vincular o usuário: ${result.error.message}`); return }
+    setNotice(`Usuário vinculado a ${linking.nome_fantasia}.`)
+    setLinking(null)
+    setMemberEmail('')
+    await loadAdminData()
+  }
+  const updateStatus = async (company: ManagedCompany) => {
+    if (!supabase) return
+    const nextStatus: ManagedCompany['status_licenca'] = company.status_licenca === 'ativa' ? 'bloqueada' : 'ativa'
+    setBusy(true)
+    setError('')
+    const result = await supabase.rpc('platform_update_company', {
+      p_tenant_id: company.id,
+      p_nome_fantasia: company.nome_fantasia,
+      p_status_licenca: nextStatus,
+      p_expira_em: company.expira_em,
+      p_plano: company.plano
+    })
+    setBusy(false)
+    if (result.error) { setError(`Não foi possível alterar a licença: ${result.error.message}`); return }
+    setNotice(nextStatus === 'ativa' ? 'Licença ativada.' : 'Comércio suspenso.')
+    await loadAdminData()
+  }
+
+  return <div className="platform-admin-shell">
+    <aside className="platform-admin-sidebar">
+      <div className="sidebar-brand"><Brand /></div>
+      <div className="admin-identity"><div className="admin-identity-icon"><ShieldCheck size={19} /></div><div><strong>Administração</strong><small>Plataforma SILVA XVI</small></div></div>
+      <div className="admin-sidebar-note"><span className="connection-dot" /> Acesso administrativo validado</div>
+      <button className="nav-item logout" onClick={onLogout}><LogOut size={18} />Sair da conta</button>
+    </aside>
+    <main className="platform-admin-main">
+      <header className="platform-admin-header">
+        <div><span className="breadcrumb">PAINEL DA PLATAFORMA</span><h1>Comércios</h1><p>Gerencie adesões, planos e licenças em um único lugar.</p></div>
+        <button className="button primary" onClick={() => { resetCompanyForm(); setCompanyFormOpen(true); setLinking(null) }}><Plus size={17} /> Novo comércio</button>
+      </header>
+      <div className="platform-admin-content">
+        {error && <div className="alert" role="alert">{error}</div>}
+        {notice && <div className="admin-notice" role="status">{notice}</div>}
+        <section className="admin-metrics">
+          <article><span>Total de comércios</span><strong>{companies.length}</strong><Building2 size={20} /></article>
+          <article><span>Licenças ativas</span><strong>{activeCount}</strong><Check size={20} /></article>
+          <article><span>Em período de teste</span><strong>{trialCount}</strong><Wifi size={20} /></article>
+          <article><span>Bloqueados ou vencidos</span><strong>{blockedCount}</strong><CloudOff size={20} /></article>
+        </section>
+        <section className="admin-table-card">
+          <div className="admin-table-toolbar">
+            <div><h2>Todos os comércios</h2><p>{filteredCompanies.length} de {companies.length} registros</p></div>
+            <div className="admin-toolbar-actions">
+              <label className="searchbox compact"><Search size={16} /><input aria-label="Buscar comércio" placeholder="Buscar comércio…" value={query} onChange={event => setQuery(event.target.value)} /></label>
+              <button className="icon-button admin-refresh" aria-label="Atualizar lista" disabled={busy} onClick={() => void loadAdminData()}><RefreshCw size={17} /></button>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table><thead><tr><th>COMÉRCIO</th><th>PLANO</th><th>LICENÇA</th><th>VENCIMENTO</th><th>USUÁRIOS</th><th>VENDAS</th><th>AÇÕES</th></tr></thead>
+              <tbody>{filteredCompanies.map(company => {
+                const expired = new Date(company.expira_em).getTime() < Date.now()
+                const currentStatus = expired ? 'Vencida' : company.status_licenca === 'ativa' ? 'Ativa' : company.status_licenca === 'teste' ? 'Teste' : 'Suspensa'
+                return <tr key={company.id}>
+                  <td><div className="admin-company-name"><div><Building2 size={16} /></div><span><strong>{company.nome_fantasia}</strong><small>{company.id}</small></span></div></td>
+                  <td>{company.plano}</td>
+                  <td><span className={`status-pill ${currentStatus === 'Ativa' ? '' : 'pending'} ${currentStatus === 'Suspensa' || currentStatus === 'Vencida' ? 'admin-status-blocked' : ''}`}>{currentStatus}</span></td>
+                  <td>{new Date(company.expira_em).toLocaleDateString('pt-BR')}</td>
+                  <td>{company.total_usuarios}</td><td>{company.total_vendas}</td>
+                  <td><div className="admin-row-actions"><button className="row-action" aria-label={`Editar ${company.nome_fantasia}`} title="Editar comércio" onClick={() => openEdit(company)}><Pencil size={14} /></button><button className="row-action" aria-label={`Vincular usuário a ${company.nome_fantasia}`} title="Vincular usuário existente" onClick={() => { setLinking(company); setEditing(null) }}><UserPlus size={14} /></button><button className="admin-status-action" disabled={busy || currentStatus === 'Vencida'} onClick={() => void updateStatus(company)}>{company.status_licenca === 'ativa' ? 'Suspender' : 'Ativar'}</button></div></td>
+                </tr>
+              })}</tbody>
+            </table>
+            {!filteredCompanies.length && <div className="table-empty">{companies.length ? 'Nenhum comércio corresponde à busca.' : 'Nenhum comércio cadastrado.'}</div>}
+          </div>
+        </section>
+        <section className="admin-audit-card">
+          <div className="admin-audit-heading"><div><h2>Atividade administrativa</h2><p>Alterações recentes de licença, plano e usuários.</p></div><span>{audit.length} eventos</span></div>
+          {audit.length ? <div className="admin-audit-list">{audit.map(entry => <article key={entry.id}><span className="admin-audit-marker"><Check size={13} /></span><div><strong>{entry.action.replace(/\./g, ' ')}</strong><p>{entry.company_name ?? 'Comércio removido'} · {entry.actor_email ?? 'Administrador'} · {new Date(entry.created_at).toLocaleString('pt-BR')}</p></div></article>)}</div> : <div className="table-empty">Ações administrativas registradas aparecerão aqui.</div>}
+        </section>
+        <AuthorshipNotice />
+      </div>
+      {companyFormOpen && <div className="admin-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) resetCompanyForm() }}>
+        <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-company-title">
+          <div className="admin-modal-heading"><div><span className="eyebrow">GESTÃO DE ADESÕES</span><h2 id="admin-company-title">{editing ? 'Editar comércio' : 'Novo comércio'}</h2></div><button className="icon-button" aria-label="Fechar" onClick={resetCompanyForm}><X size={18} /></button></div>
+          <form className="admin-form" onSubmit={saveCompany}>
+            <label>Nome do comércio<input required maxLength={120} value={companyName} onChange={event => setCompanyName(event.target.value)} placeholder="Ex.: Mercado Central" /></label>
+            <div className="form-grid"><label>Plano<input required maxLength={80} value={plan} onChange={event => setPlan(event.target.value)} /></label><label>Status da licença<select value={licenseStatus} onChange={event => setLicenseStatus(event.target.value as ManagedCompany['status_licenca'])}><option value="teste">Em teste</option><option value="ativa">Ativa</option><option value="bloqueada">Suspensa</option></select></label></div>
+            <label>Vencimento da licença<input required type="date" value={expiration} onChange={event => setExpiration(event.target.value)} /></label>
+            {!editing && <p className="admin-form-hint">Depois de cadastrar, crie ou convide o usuário em Supabase Authentication e use “Vincular usuário” para conceder acesso ao comércio.</p>}
+            <div className="admin-modal-actions"><button type="button" className="button secondary" onClick={resetCompanyForm}>Cancelar</button><button className="button primary" disabled={busy}>{busy ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar comércio'}</button></div>
+          </form>
+        </section>
+      </div>}
+      {linking && <div className="admin-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setLinking(null) }}>
+        <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-member-title">
+          <div className="admin-modal-heading"><div><span className="eyebrow">ACESSO AO COMÉRCIO</span><h2 id="admin-member-title">Vincular usuário</h2><p>{linking.nome_fantasia}</p></div><button className="icon-button" aria-label="Fechar" onClick={() => setLinking(null)}><X size={18} /></button></div>
+          <form className="admin-form" onSubmit={linkMember}>
+            <label>E-mail cadastrado no Supabase Auth<input required type="email" value={memberEmail} onChange={event => setMemberEmail(event.target.value)} placeholder="usuario@empresa.com" /></label>
+            <label>Perfil no comércio<select value={memberRole} onChange={event => setMemberRole(event.target.value as UserRole)}><option value="gerente">Gerente</option><option value="operador_caixa">Operador de caixa</option></select></label>
+            <p className="admin-form-hint">O usuário precisa existir em Authentication no mesmo projeto Supabase. Gerentes administram o catálogo e as configurações; operadores acessam o caixa e as vendas.</p>
+            <div className="admin-modal-actions"><button type="button" className="button secondary" onClick={() => setLinking(null)}>Cancelar</button><button className="button primary" disabled={busy}>{busy ? 'Vinculando…' : 'Vincular usuário'}</button></div>
+          </form>
+        </section>
+      </div>}
+    </main>
+  </div>
 }
 
 function Workspace(props: {
