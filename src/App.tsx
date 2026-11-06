@@ -221,7 +221,7 @@ function SetupScreen() {
 }
 
 function Brand() {
-  return <div className="brand-lockup"><div className="brand-mark">XVI</div><div><strong>SILVA XVI</strong><span>utilmarket</span></div></div>
+  return <div className="brand-lockup"><div className="brand-mark">M</div><div><strong>SILVA XVI</strong><span>utilmarket</span></div></div>
 }
 
 function LoginCard({ blocked, onSuccess }: { blocked?: string; onSuccess: () => void }) {
@@ -273,7 +273,14 @@ function Workspace(props: {
     { id: 'vendas' as const, label: 'Vendas', icon: BarChart3 },
     { id: 'configuracoes' as const, label: 'Configurações', icon: Settings }
   ]
-  const title = pages.find(page => page.id === props.view)?.label ?? 'Frente de caixa'
+  const activePage = pages.find(page => page.id === props.view) ?? pages[0]
+  const descriptions: Record<View, string> = {
+    pdv: 'Realize suas vendas de forma rápida e eficiente.',
+    produtos: 'Gerencie o catálogo e acompanhe seu estoque.',
+    vendas: 'Acompanhe as movimentações do seu comércio.',
+    configuracoes: 'Personalize seu comércio e o comprovante.'
+  }
+  const title = activePage.label
   return <div className="app-shell" style={{ '--accent': props.settings.cor_primaria, '--accent-secondary': props.settings.cor_secundaria } as React.CSSProperties}>
     <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
       <div className="sidebar-brand"><Brand /><button className="icon-button mobile-close" onClick={() => setMobileMenu(false)} aria-label="Fechar menu"><X size={18} /></button></div>
@@ -284,7 +291,7 @@ function Workspace(props: {
     </aside>
     {mobileMenu && <button className="scrim" onClick={() => setMobileMenu(false)} aria-label="Fechar menu" />}
     <main className="main-area">
-      <header className="topbar"><button className="icon-button mobile-menu" aria-label="Abrir menu" onClick={() => setMobileMenu(true)}><Menu size={21} /></button><div><span className="breadcrumb">Painel</span><h1>{title}</h1></div>
+      <header className="topbar"><button className="icon-button mobile-menu" aria-label="Abrir menu" onClick={() => setMobileMenu(true)}><Menu size={21} /></button><div className="page-heading-icon"><activePage.icon size={25} /></div><div className="page-heading-copy"><span className="breadcrumb">SILVA XVI · UTILMARKET</span><h1>{title}</h1><p>{descriptions[props.view]}</p></div>
         <div className="top-actions"><div className={`sync-pill ${props.online ? '' : 'offline'}`}>{props.online ? <Wifi size={15} /> : <CloudOff size={15} />}{props.online ? 'Online' : 'Offline'}</div><div className="user-chip"><div className="user-avatar">{props.user.nome.slice(0, 1).toUpperCase()}</div><span>{props.user.nome}</span><button aria-label="Sair" title="Sair" onClick={props.onLogout}><LogOut size={15} /></button></div></div>
       </header>
       <div className="page-content">
@@ -313,6 +320,10 @@ function PosPage({ user, products, setProducts, sales, setSales, settings, setSe
   const amount = basket.reduce((sum, line) => sum + line.product.preco_venda * line.quantity, 0)
   const change = Math.max(0, Number(amountReceived) - amount)
   const filtered = products.filter(product => product.ativo && `${product.nome} ${product.codigo_barras ?? ''}`.toLowerCase().includes(search.toLowerCase())).slice(0, 24)
+  const recentRevenue = sales.reduce((sum, sale) => sum + sale.valor_total, 0)
+  const recentItems = sales.reduce((sum, sale) => sum + sale.itens.reduce((itemSum, item) => itemSum + item.quantidade, 0), 0)
+  const averageTicket = sales.length ? recentRevenue / sales.length : 0
+  const activeProducts = products.filter(product => product.ativo).length
 
   const addProduct = (product: Product) => {
     const quantityInCart = basket.find(line => line.product.id === product.id)?.quantity ?? 0
@@ -416,7 +427,14 @@ function PosPage({ user, products, setProducts, sales, setSales, settings, setSe
     return () => window.removeEventListener('keydown', handleKeys)
   }, [amount, amountReceived, basket, payment, products, saving])
 
-  return <div className="pos-layout">
+  return <div className="pos-page">
+    <div className="dashboard-stats" aria-label="Resumo das vendas e do catálogo">
+      <article className="dashboard-stat stat-blue"><div className="dashboard-stat-icon"><ShoppingBasket size={21} /></div><div><span>Vendas recentes</span><strong>{formatMoney(recentRevenue)}</strong><small>{sales.length} registros carregados</small></div></article>
+      <article className="dashboard-stat stat-purple"><div className="dashboard-stat-icon"><Barcode size={21} /></div><div><span>Itens vendidos</span><strong>{recentItems}</strong><small>na lista de vendas carregada</small></div></article>
+      <article className="dashboard-stat stat-green"><div className="dashboard-stat-icon"><Package size={21} /></div><div><span>Produtos ativos</span><strong>{activeProducts}</strong><small>disponíveis no catálogo</small></div></article>
+      <article className="dashboard-stat stat-amber"><div className="dashboard-stat-icon"><CreditCard size={21} /></div><div><span>Ticket médio</span><strong>{formatMoney(averageTicket)}</strong><small>sobre os registros carregados</small></div></article>
+    </div>
+    <div className="pos-layout">
     <section className="catalog-panel">
       <div className="page-intro"><div><span className="eyebrow">CAIXA RÁPIDO</span><h2>Nova venda</h2><p>Busque um produto ou use o leitor de código de barras.</p></div><div className="today-tag"><span className="green-dot" />{online ? 'Sincronização ativa' : 'Vendas offline ativadas'}</div></div>
       <form className="searchbox pos-search" onSubmit={scan}><Search size={19} /><input ref={inputRef} aria-label="Buscar produto ou código de barras" placeholder="Buscar produto ou ler código de barras…" value={search} onChange={event => setSearch(event.target.value)} autoFocus /><kbd>F2</kbd><button aria-label="Localizar"><Barcode size={19} /></button></form>
@@ -434,6 +452,7 @@ function PosPage({ user, products, setProducts, sales, setSales, settings, setSe
         {payment === 'Dinheiro' && Number(amountReceived) >= amount && <div className="total-row"><span>Troco</span><strong>{formatMoney(change)}</strong></div>}
         <div className="total-row"><span>Total da venda</span><strong>{formatMoney(amount)}</strong></div><button className="button primary finalize-button" disabled={!basket.length || saving || (payment === 'Dinheiro' && Number(amountReceived) < amount)} onClick={() => void finalize()}><CreditCard size={18} />{saving ? 'Salvando…' : 'Finalizar venda'}<kbd>F4</kbd></button><div className="cart-note"><Check size={14} /> Venda salva localmente antes de sincronizar</div></div>
     </aside>
+    </div>
   </div>
 }
 
