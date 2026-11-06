@@ -282,3 +282,218 @@ create policy "Gerentes enviam logotipos" on storage.objects
     and public.is_tenant_manager(((storage.foldername(name))[1])::uuid)
     and public.license_is_active(((storage.foldername(name))[1])::uuid)
   );
+
+-- Administração da plataforma: mantenha administradores fora dos papéis de cada comércio.
+create table if not exists public.platform_admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.platform_admin_audit (
+  id bigint generated always as identity primary key,
+  actor_id uuid references auth.users(id) on delete set null,
+  tenant_id uuid references public.empresas(id) on delete set null,
+  action text not null,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists platform_admin_audit_created_at_idx
+  on public.platform_admin_audit (created_at desc);
+create index if not exists usuarios_tenant_id_idx
+  on public.usuarios (tenant_id);
+
+alter table public.platform_admins enable row level security;
+alter table public.platform_admin_audit enable row level security;
+revoke all on public.platform_admins, public.platform_admin_audit from public, anon, authenticated;
+
+create or replace function public.is_platform_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.platform_admins a
+    where a.user_id = (select auth.uid())
+  );
+$$;
+
+create or replace function public.platform_list_companies()
+returns table (
+  id uuid,
+  nome_fantasia text,
+  status_licenca text,
+  expira_em timestamptz,
+  plano text,
+  total_usuarios bigint,
+  total_vendas bigint
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.is_platform_admin() then raise exception 'Acesso administrativo não autorizado'; end if;
+  return query
+    select e.id, e.nome_fantasia, e.status_licenca, e.expira_em, e.plano,
+      (select count(*) from public.usuarios u where u.tenant_id = e.id),
+      (select count(*) from public.vendas v where v.tenant_id = e.id)
+    from public.empresas e
+    order by e.created_at desc;
+end;
+$$;
+
+create or replace function public.platform_list_audit()
+returns table (
+  id bigint,
+  action text,
+  company_name text,
+  actor_email text,
+  created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.is_platform_admin() then raise exception 'Acesso administrativo não autorizado'; end if;
+  return query
+    select a.id, a.action, e.nome_fantasia, u.email::text, a.created_at
+    from public.platform_admin_audit a
+    left join public.empresas e on e.id = a.tenant_id
+    left join auth.users u on u.id = a.actor_id
+    order by a.created_at desc
+    limit 100;
+end;
+$$;
+
+create or replace function public.platform_create_company(
+  p_nome_fantasia text,
+  p_status_licenca text,
+  p_expira_em timestamptz,
+  p_plano text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_tenant_id uuid;
+begin
+  if not public.is_platform_admin() then raise exception 'Acesso administrativo não autorizado'; end if;
+  if p_nome_fantasia is null or length(trim(p_nome_fantasia)) not between 1 and 120 then
+    raise exception 'Nome do comércio inválido';
+  end if;
+  if p_status_licenca is null or p_status_licenca not in ('ativa', 'bloqueada', 'teste') then
+    raise exception 'Status de licença inválido';
+  end if;
+  if p_expira_em is null then raise exception 'Data de vencimento obrigatória'; end if;
+  if p_plano is null or length(trim(p_plano)) not between 1 and 80 then
+    raise exception 'Nome do plano inválido';
+  end if;
+
+  insert into public.empresas (nome_fantasia, status_licenca, expira_em, plano)
+    values (trim(p_nome_fantasia), p_status_licenca, p_expira_em, trim(p_plano))
+    returning id into v_tenant_id;
+  insert into public.platform_admin_audit (actor_id, tenant_id, action, details)
+    values ((select auth.uid()), v_tenant_id, 'company.created',
+      jsonb_build_object('nome_fantasia', trim(p_nome_fantasia), 'status_licenca', p_status_licenca, 'plano', trim(p_plano), 'expira_em', p_expira_em));
+  return v_tenant_id;
+end;
+$$;
+
+create or replace function public.platform_update_company(
+  p_tenant_id uuid,
+  p_nome_fantasia text,
+  p_status_licenca text,
+  p_expira_em timestamptz,
+  p_plano text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_old public.empresas%rowtype;
+begin
+  if not public.is_platform_admin() then raise exception 'Acesso administrativo não autorizado'; end if;
+  if p_tenant_id is null then raise exception 'Comércio inválido'; end if;
+  if p_nome_fantasia is null or length(trim(p_nome_fantasia)) not between 1 and 120 then
+    raise exception 'Nome do comércio inválido';
+  end if;
+  if p_status_licenca is null or p_status_licenca not in ('ativa', 'bloqueada', 'teste') then
+    raise exception 'Status de licença inválido';
+  end if;
+  if p_expira_em is null then raise exception 'Data de vencimento obrigatória'; end if;
+  if p_plano is null or length(trim(p_plano)) not between 1 and 80 then
+    raise exception 'Nome do plano inválido';
+  end if;
+
+  select e.* into v_old from public.empresas e where e.id = p_tenant_id for update;
+  if not found then raise exception 'Comércio não encontrado'; end if;
+  update public.empresas
+    set nome_fantasia = trim(p_nome_fantasia),
+        status_licenca = p_status_licenca,
+        expira_em = p_expira_em,
+        plano = trim(p_plano)
+    where id = p_tenant_id;
+  insert into public.platform_admin_audit (actor_id, tenant_id, action, details)
+    values ((select auth.uid()), p_tenant_id, 'company.updated',
+      jsonb_build_object(
+        'before', jsonb_build_object('nome_fantasia', v_old.nome_fantasia, 'status_licenca', v_old.status_licenca, 'plano', v_old.plano, 'expira_em', v_old.expira_em),
+        'after', jsonb_build_object('nome_fantasia', trim(p_nome_fantasia), 'status_licenca', p_status_licenca, 'plano', trim(p_plano), 'expira_em', p_expira_em)
+      ));
+end;
+$$;
+
+create or replace function public.platform_add_member(
+  p_tenant_id uuid,
+  p_email text,
+  p_perfil text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+begin
+  if not public.is_platform_admin() then raise exception 'Acesso administrativo não autorizado'; end if;
+  if p_tenant_id is null or not exists (select 1 from public.empresas e where e.id = p_tenant_id) then
+    raise exception 'Comércio não encontrado';
+  end if;
+  if p_email is null or length(trim(p_email)) not between 3 and 320 then raise exception 'E-mail inválido'; end if;
+  if p_perfil is null or p_perfil not in ('gerente', 'operador_caixa') then raise exception 'Perfil inválido'; end if;
+
+  select u.id into v_user_id from auth.users u where lower(u.email) = lower(trim(p_email));
+  if v_user_id is null then raise exception 'Crie ou convide primeiro este usuário em Supabase Authentication'; end if;
+  if exists (select 1 from public.usuarios u where u.id = v_user_id) then
+    raise exception 'Este usuário já está vinculado a um comércio';
+  end if;
+  insert into public.usuarios (id, tenant_id, perfil) values (v_user_id, p_tenant_id, p_perfil);
+  insert into public.platform_admin_audit (actor_id, tenant_id, action, details)
+    values ((select auth.uid()), p_tenant_id, 'member.linked',
+      jsonb_build_object('email', lower(trim(p_email)), 'perfil', p_perfil));
+  return v_user_id;
+end;
+$$;
+
+revoke all on function public.is_platform_admin() from public, anon, authenticated;
+revoke all on function public.platform_list_companies() from public, anon, authenticated;
+revoke all on function public.platform_list_audit() from public, anon, authenticated;
+revoke all on function public.platform_create_company(text, text, timestamptz, text) from public, anon, authenticated;
+revoke all on function public.platform_update_company(uuid, text, text, timestamptz, text) from public, anon, authenticated;
+revoke all on function public.platform_add_member(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.is_platform_admin() to authenticated;
+grant execute on function public.platform_list_companies() to authenticated;
+grant execute on function public.platform_list_audit() to authenticated;
+grant execute on function public.platform_create_company(text, text, timestamptz, text) to authenticated;
+grant execute on function public.platform_update_company(uuid, text, text, timestamptz, text) to authenticated;
+grant execute on function public.platform_add_member(uuid, text, text) to authenticated;
