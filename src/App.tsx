@@ -200,8 +200,8 @@ export default function App() {
 
   if (!isSupabaseConfigured) return <SetupScreen />
   if (checking) return <div className="loading-screen"><div className="loader" />Validando acesso…</div>
-  if (blocked) return <div className="login-page"><LoginCard blocked={blocked} onSuccess={checkSession} /></div>
-  if (!user) return <div className="login-page"><LoginCard onSuccess={checkSession} /></div>
+  if (blocked) return <LoginCard blocked={blocked} onSuccess={checkSession} />
+  if (!user) return <LoginCard onSuccess={checkSession} />
 
   return <Workspace
     user={user} view={view} setView={setView} products={products} setProducts={setProducts}
@@ -217,7 +217,7 @@ function SetupScreen() {
     <h1>Conecte seu Supabase</h1>
     <p>Adicione <code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_ANON_KEY</code> ao arquivo <code>.env</code> e reinicie o aplicativo.</p>
     <p className="muted">O acesso ao sistema exige autenticação e validação da licença configurada no banco.</p>
-  </section></div>
+  </section><AuthorshipNotice /></div>
 }
 
 function Brand() {
@@ -240,7 +240,7 @@ function LoginCard({ blocked, onSuccess }: { blocked?: string; onSuccess: () => 
     else onSuccess()
   }
 
-  return <section className="login-card">
+  return <div className="login-page"><section className="login-card">
     <Brand /><span className="eyebrow">GESTÃO PARA O SEU COMÉRCIO</span>
     <h1>Entre na sua conta</h1><p>Acesse seu caixa, produtos e vendas.</p>
     {error && <div className="alert" role="alert">{error}</div>}
@@ -250,7 +250,15 @@ function LoginCard({ blocked, onSuccess }: { blocked?: string; onSuccess: () => 
       <button className="button primary full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
     </form>
     <p className="login-foot">Precisa de acesso? Fale com o administrador da sua empresa.</p>
-  </section>
+  </section><AuthorshipNotice /></div>
+}
+
+function AuthorshipNotice() {
+  return <footer className="authorship-notice">
+    <span>© {new Date().getFullYear()} Fabio Silva dos Anjos. SILVA XVI utilmarket. Todos os direitos reservados.</span>
+    <span>Reprodução, distribuição ou adaptação somente mediante autorização.</span>
+    <span>Contato: <a href="https://wa.me/5571999383974">WhatsApp (71) 99938-3974</a> · <a href="mailto:fabiosilvaanjos@live.com">fabiosilvaanjos@live.com</a></span>
+  </footer>
 }
 
 function Workspace(props: {
@@ -284,6 +292,7 @@ function Workspace(props: {
         {props.view === 'produtos' && props.user.perfil === 'gerente' && <ProductsPage {...props} />}
         {props.view === 'vendas' && <SalesPage sales={props.sales} />}
         {props.view === 'configuracoes' && props.user.perfil === 'gerente' && <SettingsPage {...props} />}
+        <AuthorshipNotice />
       </div>
       {props.toast && <div className="toast" role="status">{props.toast}</div>}
     </main>

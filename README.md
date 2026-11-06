@@ -2,6 +2,10 @@
 
 Frente de caixa PWA em português para mercearias e pequenos comércios. A aplicação é hospedada como arquivos estáticos no GitHub Pages; Supabase fornece autenticação, banco de dados e Storage, enquanto PouchDB/IndexedDB mantém catálogo, configurações e vendas no dispositivo para uso offline.
 
+## Autoria e direitos
+
+O SILVA XVI utilmarket é de autoria de Fabio Silva dos Anjos. Todos os direitos reservados. Este repositório e o aplicativo não concedem licença para copiar, modificar, distribuir, sublicenciar ou explorar comercialmente o código, a marca ou os materiais do projeto. Solicitações de autorização: [fabiosilvaanjos@live.com](mailto:fabiosilvaanjos@live.com) ou [WhatsApp (71) 99938-3974](https://wa.me/5571999383974). Consulte [`LICENSE`](LICENSE).
+
 ## Funcionalidades
 
 - Login pelo Supabase Auth e bloqueio quando a licença não está `ativa` ou já expirou.
