@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   BarChart3, Barcode, Building2, Check, ChevronDown, Cloud, CloudOff, CreditCard,
   LogOut, Menu, Minus, Package, Pencil, Plus, Printer, RefreshCw, Search, Settings,
@@ -464,8 +464,7 @@ function PlatformAdminApp({ onLogout }: { onLogout: () => void }) {
         </section>
         <AuthorshipNotice />
       </div>
-      {companyFormOpen && <div className="admin-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) resetCompanyForm() }}>
-        <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-company-title">
+      {companyFormOpen && <AccessibleDialog labelledBy="admin-company-title" onClose={resetCompanyForm}>
           <div className="admin-modal-heading"><div><span className="eyebrow">GESTÃO DE ADESÕES</span><h2 id="admin-company-title">{editing ? 'Editar comércio' : 'Novo comércio'}</h2></div><button className="icon-button" aria-label="Fechar" onClick={resetCompanyForm}><X size={18} /></button></div>
           <form className="admin-form" onSubmit={saveCompany}>
             <label>Nome do comércio<input required maxLength={120} value={companyName} onChange={event => setCompanyName(event.target.value)} placeholder="Ex.: Mercado Central" /></label>
@@ -474,10 +473,8 @@ function PlatformAdminApp({ onLogout }: { onLogout: () => void }) {
             {!editing && <p className="admin-form-hint">Depois de cadastrar, crie ou convide o usuário em Supabase Authentication e use “Vincular usuário” para conceder acesso ao comércio.</p>}
             <div className="admin-modal-actions"><button type="button" className="button secondary" onClick={resetCompanyForm}>Cancelar</button><button className="button primary" disabled={busy}>{busy ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar comércio'}</button></div>
           </form>
-        </section>
-      </div>}
-      {linking && <div className="admin-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setLinking(null) }}>
-        <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-member-title">
+      </AccessibleDialog>}
+      {linking && <AccessibleDialog labelledBy="admin-member-title" onClose={() => setLinking(null)}>
           <div className="admin-modal-heading"><div><span className="eyebrow">ACESSO AO COMÉRCIO</span><h2 id="admin-member-title">Vincular usuário</h2><p>{linking.nome_fantasia}</p></div><button className="icon-button" aria-label="Fechar" onClick={() => setLinking(null)}><X size={18} /></button></div>
           <form className="admin-form" onSubmit={linkMember}>
             <label>E-mail cadastrado no Supabase Auth<input required type="email" value={memberEmail} onChange={event => setMemberEmail(event.target.value)} placeholder="usuario@empresa.com" /></label>
@@ -485,9 +482,57 @@ function PlatformAdminApp({ onLogout }: { onLogout: () => void }) {
             <p className="admin-form-hint">O usuário precisa existir em Authentication no mesmo projeto Supabase. Gerentes administram o catálogo e as configurações; operadores acessam o caixa e as vendas.</p>
             <div className="admin-modal-actions"><button type="button" className="button secondary" onClick={() => setLinking(null)}>Cancelar</button><button className="button primary" disabled={busy}>{busy ? 'Vinculando…' : 'Vincular usuário'}</button></div>
           </form>
-        </section>
-      </div>}
+      </AccessibleDialog>}
     </main>
+  </div>
+}
+
+function AccessibleDialog({ labelledBy, onClose, children }: { labelledBy: string; onClose: () => void; children: ReactNode }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    const focusable = () => [...dialog.querySelectorAll<HTMLElement>(focusableSelector)]
+    const first = focusable()[0]
+    const initialFocus = first ?? dialog
+    initialFocus.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const elements = focusable()
+      if (!elements.length) {
+        event.preventDefault()
+        dialog.focus()
+      } else if (event.shiftKey && document.activeElement === elements[0]) {
+        event.preventDefault()
+        elements[elements.length - 1].focus()
+      } else if (!event.shiftKey && document.activeElement === elements[elements.length - 1]) {
+        event.preventDefault()
+        elements[0].focus()
+      }
+    }
+
+    dialog.addEventListener('keydown', handleKeyDown)
+    return () => {
+      dialog.removeEventListener('keydown', handleKeyDown)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [])
+
+  return <div className="admin-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onCloseRef.current() }}>
+    <section ref={dialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby={labelledBy} tabIndex={-1}>
+      {children}
+    </section>
   </div>
 }
 
@@ -516,7 +561,7 @@ function Workspace(props: {
       <div className="sidebar-brand"><Brand /><button className="icon-button mobile-close" onClick={() => setMobileMenu(false)} aria-label="Fechar menu"><X size={18} /></button></div>
       <div className="shop-chip"><div className="shop-avatar">{props.user.nome_fantasia.slice(0, 1).toUpperCase()}</div><div><strong>{props.user.nome_fantasia}</strong><small>{props.user.plano}</small></div><ChevronDown size={16} /></div>
       <small className="nav-caption">MENU PRINCIPAL</small>
-      <nav>{pages.filter(page => props.user.perfil === 'gerente' || (page.id !== 'produtos' && page.id !== 'configuracoes')).map(page => <button key={page.id} className={`nav-item ${props.view === page.id ? 'active' : ''}`} onClick={() => { props.setView(page.id); setMobileMenu(false) }}><page.icon size={19} /><span>{page.label}</span></button>)}</nav>
+      <nav>{pages.filter(page => props.user.perfil === 'gerente' || (page.id !== 'produtos' && page.id !== 'configuracoes')).map(page => <button key={page.id} className={`nav-item ${props.view === page.id ? 'active' : ''}`} aria-current={props.view === page.id ? 'page' : undefined} onClick={() => { props.setView(page.id); setMobileMenu(false) }}><page.icon size={19} /><span>{page.label}</span></button>)}</nav>
       <div className="sidebar-bottom"><div className={`connection ${props.online ? 'connected' : ''}`}><span className="connection-dot" />{props.online ? 'Conectado' : 'Modo offline'}<span className="connection-extra">{props.syncing ? 'Sincronizando' : '·'}</span></div><button className="nav-item logout" onClick={props.onLogout}><LogOut size={18} />Sair da conta</button></div>
     </aside>
     {mobileMenu && <button className="scrim" onClick={() => setMobileMenu(false)} aria-label="Fechar menu" />}
@@ -768,7 +813,7 @@ function ProductsPage({ user, products, setProducts, online, notify }: { user: U
   return <div className="content-page">
     <div className="page-intro"><div><span className="eyebrow">CATÁLOGO</span><h2>Produtos</h2><p>Consulte seu estoque e mantenha o catálogo organizado.</p></div><button className="button primary" onClick={() => { resetForm(); setFormOpen(true) }}><Plus size={17} /> Cadastrar produto</button></div>
     {formOpen && <form className="product-form" onSubmit={save}><div className="form-heading"><strong>{editingId ? 'Editar produto' : 'Novo produto'}</strong><button type="button" className="icon-button" onClick={resetForm} aria-label="Fechar"><X size={18} /></button></div><div className="form-grid"><label>Nome<input required value={name} onChange={event => setName(event.target.value)} placeholder="Ex.: Café 500 g" /></label><label>Código de barras<input value={barcode} onChange={event => setBarcode(event.target.value)} placeholder="Opcional" /></label><label>Preço de custo (R$)<input required type="number" min="0" step="0.01" value={cost} onChange={event => setCost(event.target.value)} /></label><label>Preço de venda (R$)<input required type="number" min="0" step="0.01" value={price} onChange={event => setPrice(event.target.value)} /></label><label>Estoque atual<input type="number" min="0" step="1" value={stock} onChange={event => setStock(event.target.value)} /></label><label>Estoque mínimo<input type="number" min="0" step="1" value={minimum} onChange={event => setMinimum(event.target.value)} /></label><label>Imagem do produto<input type="file" accept="image/*" disabled={!online} onChange={event => setImageFile(event.target.files?.[0] ?? null)} />{!online && <small>Disponível ao conectar à internet.</small>}</label></div><button className="button primary" disabled={saving}>{saving ? 'Salvando…' : editingId ? 'Salvar alterações' : 'Salvar produto'}</button></form>}
-    <div className="table-card"><div className="table-toolbar"><div className="searchbox compact"><Search size={17} /><input placeholder="Buscar produto…" value={query} onChange={event => setQuery(event.target.value)} /></div><span>{filtered.length} produtos</span></div><div className="table-scroll"><table><thead><tr><th>PRODUTO</th><th>CÓDIGO</th><th>CUSTO / VENDA</th><th>ESTOQUE</th><th>STATUS</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map(product => <tr key={product.id}><td><div className="table-product"><div className="mini-product">{product.imagem_url ? <img src={product.imagem_url} alt="" /> : <Package size={16} />}</div><strong>{product.nome}</strong></div></td><td>{product.codigo_barras || '—'}</td><td>{formatMoney(product.preco_custo)} / <strong>{formatMoney(product.preco_venda)}</strong></td><td><span className={`stock-pill ${product.quantidade_atual <= product.estoque_minimo ? 'low' : ''}`}>{product.quantidade_atual} un.</span></td><td><span className={`status-pill ${!product.ativo || product.local_sync_status === 'erro' ? 'pending' : ''}`} title={product.local_sync_error}>{product.local_sync_status === 'erro' ? 'Erro na sync' : !product.ativo ? 'Inativo' : product.local_sync_status === 'pendente' ? 'Pendente' : 'Ativo'}</span></td><td><button className="row-action" aria-label={`Editar ${product.nome}`} onClick={() => startEditing(product)}><Pencil size={15} /></button></td></tr>)}</tbody></table>{!filtered.length && <div className="table-empty">Nenhum produto cadastrado.</div>}</div></div>
+    <div className="table-card"><div className="table-toolbar"><label className="searchbox compact"><Search size={17} /><input aria-label="Buscar produtos" placeholder="Buscar produto…" value={query} onChange={event => setQuery(event.target.value)} /></label><span>{filtered.length} produtos</span></div><div className="table-scroll"><table><thead><tr><th>PRODUTO</th><th>CÓDIGO</th><th>CUSTO / VENDA</th><th>ESTOQUE</th><th>STATUS</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map(product => <tr key={product.id}><td><div className="table-product"><div className="mini-product">{product.imagem_url ? <img src={product.imagem_url} alt="" /> : <Package size={16} />}</div><strong>{product.nome}</strong></div></td><td>{product.codigo_barras || '—'}</td><td>{formatMoney(product.preco_custo)} / <strong>{formatMoney(product.preco_venda)}</strong></td><td><span className={`stock-pill ${product.quantidade_atual <= product.estoque_minimo ? 'low' : ''}`}>{product.quantidade_atual} un.</span></td><td><span className={`status-pill ${!product.ativo || product.local_sync_status === 'erro' ? 'pending' : ''}`} title={product.local_sync_error}>{product.local_sync_status === 'erro' ? 'Erro na sync' : !product.ativo ? 'Inativo' : product.local_sync_status === 'pendente' ? 'Pendente' : 'Ativo'}</span></td><td><button className="row-action" aria-label={`Editar ${product.nome}`} onClick={() => startEditing(product)}><Pencil size={15} /></button></td></tr>)}</tbody></table>{!filtered.length && <div className="table-empty" role="status">{products.length ? 'Nenhum produto corresponde à busca.' : 'Nenhum produto cadastrado.'}</div>}</div></div>
     <p className="data-note"><Cloud size={15} /> {online ? 'Catálogo sincronizado com a nuvem.' : 'O catálogo exibido foi salvo localmente e será atualizado quando houver conexão.'}</p>
   </div>
 }
