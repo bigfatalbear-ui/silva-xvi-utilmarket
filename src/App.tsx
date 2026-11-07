@@ -40,8 +40,29 @@ type AdminAuditEntry = {
   actor_email: string | null
   created_at: string
 }
+type RecoveryStatus = 'pending' | 'ready' | 'invalid'
 const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const cachedUserKey = (userId: string) => `utilmarket:session:${userId}`
+
+function getRecoveryStatusFromUrl(): RecoveryStatus | null {
+  const query = new URLSearchParams(window.location.search)
+  const hash = new URLSearchParams(window.location.hash.slice(1))
+  const isRecovery = query.get('type') === 'recovery' || hash.get('type') === 'recovery'
+  const hasAuthError = [query, hash].some(params => params.has('error') || params.has('error_code') || params.has('error_description'))
+  const expiredOtp = [query, hash].some(params => params.get('error_code') === 'otp_expired')
+  if (!isRecovery && !expiredOtp) return null
+  if (hasAuthError) return 'invalid'
+  return 'pending'
+}
+
+function clearAuthRedirectFromUrl() {
+  const url = new URL(window.location.href)
+  for (const key of ['access_token', 'refresh_token', 'expires_at', 'expires_in', 'token_type', 'type', 'code', 'error', 'error_code', 'error_description']) {
+    url.searchParams.delete(key)
+  }
+  url.hash = ''
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}`)
+}
 
 function getCachedUser(userId: string): UserInfo | null {
   try {
@@ -56,6 +77,10 @@ export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null)
   const [checking, setChecking] = useState(true)
   const [blocked, setBlocked] = useState('')
+  const [recoveryStatus, setRecoveryStatusState] = useState<RecoveryStatus | null>(getRecoveryStatusFromUrl)
+  const recoveryStatusRef = useRef(recoveryStatus)
+  const [forceLogin, setForceLogin] = useState(false)
+  const [loginNotice, setLoginNotice] = useState('')
   const [view, setView] = useState<View>('pdv')
   const [products, setProducts] = useState<Product[]>([])
   const [sales, setSales] = useState<Sale[]>([])
@@ -64,6 +89,11 @@ export default function App() {
   const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState('')
   const [platformAdmin, setPlatformAdmin] = useState(false)
+
+  const setRecoveryStatus = useCallback((status: RecoveryStatus | null) => {
+    recoveryStatusRef.current = status
+    setRecoveryStatusState(status)
+  }, [])
 
   const loadWorkspace = useCallback(async (tenantId: string) => {
     const [cachedProducts, cachedSettings] = await Promise.all([
@@ -163,9 +193,23 @@ export default function App() {
   useEffect(() => {
     void checkSession()
     if (!supabase) return
-    const { data: listener } = supabase.auth.onAuthStateChange(() => { void checkSession() })
+    const { data: listener } = supabase.auth.onAuthStateChange(event => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryStatus('ready')
+        setChecking(false)
+        return
+      }
+      if (recoveryStatusRef.current !== null) return
+      void checkSession()
+    })
     return () => listener.subscription.unsubscribe()
-  }, [checkSession])
+  }, [checkSession, setRecoveryStatus])
+
+  useEffect(() => {
+    if (recoveryStatus !== 'pending') return
+    const timeout = window.setTimeout(() => setRecoveryStatus('invalid'), 15_000)
+    return () => window.clearTimeout(timeout)
+  }, [recoveryStatus, setRecoveryStatus])
 
   useEffect(() => {
     const setConnection = () => setOnline(navigator.onLine)
@@ -225,11 +269,38 @@ export default function App() {
     setSales([])
   }
 
+  const returnToLogin = () => {
+    clearAuthRedirectFromUrl()
+    setRecoveryStatus(null)
+    setForceLogin(true)
+    setLoginNotice('')
+  }
+
+  const handleLoginSuccess = () => {
+    setForceLogin(false)
+    setLoginNotice('')
+    void checkSession()
+  }
+
+  const handlePasswordSaved = (notice: string) => {
+    clearAuthRedirectFromUrl()
+    setRecoveryStatus(null)
+    setForceLogin(true)
+    setLoginNotice(notice)
+  }
+
   if (!isSupabaseConfigured) return <SetupScreen />
+  if (recoveryStatus) return <PasswordRecoveryCard
+    status={recoveryStatus}
+    onInvalid={() => setRecoveryStatus('invalid')}
+    onReturnToLogin={returnToLogin}
+    onPasswordSaved={handlePasswordSaved}
+  />
+  if (forceLogin) return <LoginCard notice={loginNotice} onSuccess={handleLoginSuccess} />
   if (checking) return <div className="loading-screen"><div className="loader" />Validando acesso…</div>
   if (platformAdmin) return <PlatformAdminApp onLogout={logout} />
-  if (blocked) return <LoginCard blocked={blocked} onSuccess={checkSession} />
-  if (!user) return <LoginCard onSuccess={checkSession} />
+  if (blocked) return <LoginCard blocked={blocked} onSuccess={handleLoginSuccess} />
+  if (!user) return <LoginCard onSuccess={handleLoginSuccess} />
 
   return <Workspace
     user={user} view={view} setView={setView} products={products} setProducts={setProducts}
@@ -252,11 +323,12 @@ function Brand() {
   return <div className="brand-lockup"><div className="brand-mark">M</div><div><strong>SILVA XVI</strong><span>utilmarket</span></div></div>
 }
 
-function LoginCard({ blocked, onSuccess }: { blocked?: string; onSuccess: () => void }) {
+function LoginCard({ blocked, notice, onSuccess }: { blocked?: string; notice?: string; onSuccess: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(blocked ?? '')
+  const [resetNotice, setResetNotice] = useState('')
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -268,16 +340,119 @@ function LoginCard({ blocked, onSuccess }: { blocked?: string; onSuccess: () => 
     else onSuccess()
   }
 
+  const requestPasswordReset = async () => {
+    if (!supabase) return
+    if (!email.trim()) {
+      setError('Informe seu e-mail para receber o link de recuperação.')
+      return
+    }
+    setError('')
+    setResetNotice('')
+    setBusy(true)
+    try {
+      const redirectTo = new URL(import.meta.env.BASE_URL, window.location.origin).toString()
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo })
+      if (resetError) setError('Não foi possível solicitar a recuperação agora. Confira o e-mail e tente novamente.')
+      else setResetNotice('Se houver uma conta para este e-mail, enviaremos um link para criar uma nova senha.')
+    } catch {
+      setError('Não foi possível solicitar a recuperação agora. Verifique sua conexão e tente novamente.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return <div className="login-page"><section className="login-card">
     <Brand /><span className="eyebrow">GESTÃO PARA O SEU COMÉRCIO</span>
     <h1>Entre na sua conta</h1><p>Acesse seu caixa, produtos e vendas.</p>
     {error && <div className="alert" role="alert">{error}</div>}
+    {(notice || resetNotice) && <div className="auth-notice" role="status">{notice || resetNotice}</div>}
     <form onSubmit={submit} className="form-stack">
       <label>E-mail<input type="email" autoComplete="username" required value={email} onChange={event => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label>
       <label>Senha<input type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} placeholder="Sua senha" /></label>
       <button className="button primary full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
     </form>
+    <button className="auth-link" type="button" disabled={busy} onClick={() => void requestPasswordReset()}>Esqueceu sua senha?</button>
     <p className="login-foot">Precisa de acesso? Fale com o administrador da sua empresa.</p>
+  </section><AuthorshipNotice /></div>
+}
+
+function PasswordRecoveryCard({
+  status, onInvalid, onReturnToLogin, onPasswordSaved
+}: {
+  status: RecoveryStatus
+  onInvalid: () => void
+  onReturnToLogin: () => void
+  onPasswordSaved: (notice: string) => void
+}) {
+  const [password, setPassword] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!supabase || status !== 'ready') return
+    if (password.length < 6) {
+      setError('A senha deve ter pelo menos 6 caracteres.')
+      return
+    }
+    if (password !== confirmation) {
+      setError('As senhas não coincidem.')
+      return
+    }
+    setError('')
+    setBusy(true)
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError || !session) {
+        onInvalid()
+        return
+      }
+      const { error: updateError } = await supabase.auth.updateUser({ password })
+      if (updateError) {
+        const message = updateError.message.toLowerCase()
+        if (message.includes('expired') || message.includes('invalid') || message.includes('jwt') || message.includes('session')) {
+          onInvalid()
+        } else {
+          setError('Não foi possível atualizar a senha. Tente novamente ou solicite um novo link.')
+        }
+        return
+      }
+      let signOutFailed = false
+      try {
+        const { error } = await supabase.auth.signOut({ scope: 'local' })
+        signOutFailed = Boolean(error)
+      } catch {
+        signOutFailed = true
+      }
+      onPasswordSaved(signOutFailed
+        ? 'Senha atualizada. Não foi possível encerrar esta sessão automaticamente; entre novamente para continuar.'
+        : 'Senha atualizada. Entre com sua nova senha.')
+    } catch {
+      setError('Não foi possível atualizar a senha. O link pode ter expirado; solicite outro na tela de login.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const invalid = status === 'invalid'
+
+  return <div className="login-page"><section className="login-card">
+    <Brand />
+    <span className="eyebrow">RECUPERAÇÃO DE CONTA</span>
+    <h1>{invalid ? 'Link inválido ou expirado' : status === 'pending' ? 'Validando seu link' : 'Crie uma nova senha'}</h1>
+    {invalid
+      ? <p>Este link de recuperação é inválido ou expirou. Solicite um novo link pela tela de login.</p>
+      : status === 'pending'
+        ? <p>Estamos validando o link de recuperação. Aguarde um momento.</p>
+        : <p>Defina e confirme sua nova senha para acessar sua conta.</p>}
+    {error && <div className="alert" role="alert">{error}</div>}
+    {status === 'ready' && <form onSubmit={submit} className="form-stack">
+      <label>Nova senha<input type="password" autoComplete="new-password" minLength={6} required value={password} onChange={event => setPassword(event.target.value)} /></label>
+      <label>Confirme a nova senha<input type="password" autoComplete="new-password" minLength={6} required value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
+      <button className="button primary full" disabled={busy}>{busy ? 'Salvando…' : 'Salvar nova senha'}</button>
+    </form>}
+    {status !== 'ready' && <button className="button primary full" type="button" onClick={onReturnToLogin}>Voltar ao login</button>}
   </section><AuthorshipNotice /></div>
 }
 

@@ -95,6 +95,6 @@ O workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) execut
 2. Em **Settings → Actions → General → Workflow permissions**, permita leitura e escrita do conteúdo para o `GITHUB_TOKEN`.
 3. Faça push para `main` ou execute manualmente o workflow em **Actions**.
 4. Em **Settings → Pages**, selecione **Deploy from a branch**, branch `gh-pages` e pasta `/(root)`. Após o primeiro deploy, o endereço será `https://SEU-USUARIO.github.io/NOME-DO-REPOSITORIO/`.
-5. No Supabase, acesse **Authentication → URL Configuration** e configure a **Site URL** com esse endereço e a **Redirect URL** `https://SEU-USUARIO.github.io/NOME-DO-REPOSITORIO/**` (além de `http://localhost:5173/**` para desenvolvimento).
+5. No Supabase, acesse **Authentication → URL Configuration** e configure a **Site URL** com esse endereço e a **Redirect URL** `https://SEU-USUARIO.github.io/NOME-DO-REPOSITORIO/**` (além de `http://localhost:5173/**` para desenvolvimento). A recuperação de senha retorna ao caminho-base do app, inclusive o subcaminho do GitHub Pages; esse endereço precisa estar permitido na lista de redirects.
 
 Após alterar secrets, execute novamente o workflow para incorporá-los ao build estático. Os valores `VITE_*` são visíveis no navegador; use somente a chave pública `anon`, nunca `service_role`.
