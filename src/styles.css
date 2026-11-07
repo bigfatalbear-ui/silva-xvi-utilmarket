@@ -24,6 +24,8 @@
 .toast{position:fixed;right:24px;bottom:22px;z-index:20;max-width:min(440px,calc(100vw - 32px));padding:12px 16px;border:1px solid #dfe5df;border-radius:9px;background:#fff;color:#35423a;box-shadow:0 12px 35px #16271d20;font-size:12px;line-height:1.5}
 .row-action{height:30px;width:30px;border:1px solid #e8eaed;border-radius:7px;background:#fff;color:#717986;display:grid;place-items:center}
 .row-action:hover{border-color:var(--accent);color:var(--accent)}
+.auth-link{border:0;background:transparent;color:var(--accent-bright);padding:13px 0 0;font-size:12px;font-weight:600;text-align:left;text-decoration:underline;text-underline-offset:3px}
+.auth-notice{margin-bottom:17px;padding:11px 12px;border:1px solid #245c46;border-radius:8px;background:#10291f;color:#a8e1bf;font-size:12px;line-height:1.5}
 
 /* Utilmarket dark dashboard theme */
 :root{
